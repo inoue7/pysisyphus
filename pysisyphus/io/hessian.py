@@ -33,9 +33,9 @@ def save_hessian(h5_fn, geom, cart_hessian=None, energy=None, mult=None):
         handle.create_dataset("coords3d", data=coords3d)
 
         try:
-            handle.attrs["atoms"] = atoms_lower
+            handle.attrs["atoms"] = [atom.lower() for atom in atoms]
         except OSError:
-            handle.create_dataset("atoms", data=atoms_lower)
+            handle.create_dataset("atoms", data=[atom.lower() for atom in atoms])
         handle.attrs["energy"] = energy
         handle.attrs["mult"] = mult
 
@@ -50,9 +50,9 @@ def save_third_deriv(h5_fn, geom, third_deriv_result, H_mw, H_proj):
         handle.create_dataset("H_mw", data=H_mw)
         handle.create_dataset("H_proj", data=H_proj)
         try:
-            handle.attrs["atoms"] = atoms_lower
+            handle.attrs["atoms"] = [atom.lower() for atom in atoms]
         except OSError:
-            handle.create_dataset("atoms", data=atoms_lower)
+            handle.create_dataset("atoms", data=[atom.lower() for atom in atoms])
 
 
 def geom_from_hessian(h5_fn, **geom_kwargs):
