@@ -8,15 +8,24 @@ from collections import deque
 import h5py
 import numpy as np
 
+import torch
 
 def taylor(energy, gradient, hessian, step):
     """Taylor series expansion of the energy to second order."""
-    return energy + step @ gradient + 0.5 * step @ hessian @ step
+    if isinstance(hessian, torch.Tensor):
+        step_t = torch.as_tensor(step, dtype=hessian.dtype, device=hessian.device)
+        return energy + step @ gradient + 0.5 * (step_t @ hessian @ step_t).item()
+    else:
+        return energy + step @ gradient + 0.5 * step @ hessian @ step
 
 
 def taylor_grad(gradient, hessian, step):
     """Gradient of a Taylor series expansion of the energy to second order."""
-    return gradient + hessian @ step
+    if isinstance(hessian, torch.Tensor):
+        step_t = torch.as_tensor(step, dtype=hessian.dtype, device=hessian.device)
+        return gradient + (hessian @ step_t).cpu().numpy()
+    else:
+        return gradient + hessian @ step
 
 
 class DWI:

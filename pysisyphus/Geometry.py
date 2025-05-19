@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import sys
+import torch
 
 import h5py
 import numpy as np
@@ -1026,7 +1027,7 @@ class Geometry:
     @cart_hessian.setter
     def cart_hessian(self, cart_hessian):
         if cart_hessian is not None:
-            cart_hessian = np.array(cart_hessian)
+            # cart_hessian = np.array(cart_hessian)
             assert cart_hessian.shape == (self.cart_coords.size, self.cart_coords.size)
         self._hessian = cart_hessian
 
@@ -1055,7 +1056,11 @@ class Geometry:
     # self._hessian = hessian
 
     def mass_weigh_hessian(self, hessian):
-        return self.mm_sqrt_inv.dot(hessian).dot(self.mm_sqrt_inv)
+        if isinstance(hessian, torch.Tensor):
+            mm_sqrt_inv = torch.tensor(self.mm_sqrt_inv, dtype=hessian.dtype, device=hessian.device)
+            return mm_sqrt_inv @ hessian @ mm_sqrt_inv
+        else:
+            return self.mm_sqrt_inv.dot(hessian).dot(self.mm_sqrt_inv)
 
     @property
     def mw_hessian(self):
@@ -1087,7 +1092,11 @@ class Geometry:
             2d array containing the hessian.
         """
         mm_sqrt = np.diag(self.masses_rep**0.5)
-        return mm_sqrt.dot(mw_hessian).dot(mm_sqrt)
+        if isinstance(mw_hessian, torch.Tensor):
+            mm_sqrt = torch.tensor(mm_sqrt, dtype=mw_hessian.dtype, device=mw_hessian.device)
+            return mm_sqrt @ mw_hessian @ mm_sqrt
+        else:
+            return mm_sqrt.dot(mw_hessian).dot(mm_sqrt)
 
     def set_h5_hessian(self, fn):
         with h5py.File(fn, "r") as handle:
@@ -1109,10 +1118,20 @@ class Geometry:
 
         mw_hessian = self.mass_weigh_hessian(cart_hessian)
         proj_hessian, P = self.eckart_projection(mw_hessian, return_P=True, full=full)
-        eigvals, eigvecs = np.linalg.eigh(proj_hessian)
-        mw_cart_displs = P.T.dot(eigvecs)
-        cart_displs = self.mm_sqrt_inv.dot(mw_cart_displs)
-        cart_displs /= np.linalg.norm(cart_displs, axis=0)
+
+        if isinstance(proj_hessian, torch.Tensor):
+            eigvals, eigvecs = torch.linalg.eigh(proj_hessian)
+            mw_cart_displs = P.T @ eigvecs
+            mm_sqrt_inv = torch.tensor(self.mm_sqrt_inv, dtype=proj_hessian.dtype, device=proj_hessian.device)
+            cart_displs = mm_sqrt_inv @ mw_cart_displs
+            cart_displs /= torch.linalg.norm(cart_displs, dim=0)
+            eigvals = eigvals.cpu().numpy()
+        else:
+            eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+            mw_cart_displs = P.T.dot(eigvecs)
+            cart_displs = self.mm_sqrt_inv.dot(mw_cart_displs)
+            cart_displs /= np.linalg.norm(cart_displs, axis=0)
+
         nus = eigval_to_wavenumber(eigvals)
         return nus, eigvals, mw_cart_displs, cart_displs
 
@@ -1165,9 +1184,15 @@ class Geometry:
             return mw_hessian
 
         P = self.get_trans_rot_projector(full=full)
-        proj_hessian = P.dot(mw_hessian).dot(P.T)
-        # Projection seems to slightly break symmetry (sometimes?). Resymmetrize.
-        proj_hessian = (proj_hessian + proj_hessian.T) / 2
+        if isinstance(mw_hessian, torch.Tensor):
+            P = torch.tensor(P, device=mw_hessian.device, dtype=mw_hessian.dtype)
+            proj_hessian = P @ mw_hessian @ P.T
+            # Projection seems to slightly break symmetry (sometimes?). Resymmetrize.
+            proj_hessian = (proj_hessian + proj_hessian.T) / 2
+        else:
+            proj_hessian = P.dot(mw_hessian).dot(P.T)
+            # Projection seems to slightly break symmetry (sometimes?). Resymmetrize.
+            proj_hessian = (proj_hessian + proj_hessian.T) / 2
         if return_P:
             return proj_hessian, P
         else:

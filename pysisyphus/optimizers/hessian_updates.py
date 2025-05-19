@@ -24,14 +24,50 @@ import numpy as np
 
 from pysisyphus.optimizers.closures import bfgs_multiply
 
+import torch
+
+
+def _outer(a, b):
+    if isinstance(a, torch.Tensor):
+        return torch.outer(a, b)
+    return np.outer(a, b)
+
+def _dot(a, b):
+    if isinstance(a, torch.Tensor):
+        return torch.dot(a, b)
+    return a.dot(b)
+
 
 def bfgs_update(H, dx, dg):
+    if isinstance(H, torch.Tensor):
+        dx = torch.as_tensor(dx,  dtype=H.dtype, device=H.device)
+        dg = torch.as_tensor(dg,  dtype=H.dtype, device=H.device)
+
+        first_term  = _outer(dg, dg) / _dot(dg, dx)
+        second_term = (H @ _outer(dx, dx) @ H) / _dot(dx, H @ dx)
+        return first_term - second_term, "BFGS"
+
     first_term = np.outer(dg, dg) / dg.dot(dx)
     second_term = H.dot(np.outer(dx, dx)).dot(H) / dx.dot(H).dot(dx)
     return first_term - second_term, "BFGS"
 
 
 def damped_bfgs_update(H, dx, dg):
+    # if isinstance(H, torch.Tensor):
+    #     dx = torch.as_tensor(dx, dtype=H.dtype, device=H.device)
+    #     dg = torch.as_tensor(dg, dtype=H.dtype, device=H.device)
+
+    #     dxdg  = _dot(dx, dg)
+    #     dxHdx = _dot(dx, H @ dx)
+    #     theta = 1.0
+    #     if dxdg < 0.2 * dxHdx:
+    #         theta = 0.8 * dxHdx / (dxHdx - dxdg)
+    #     r = theta * dg + (1 - theta) * (H @ dx)
+
+    #     first_term  = _outer(r, r) / _dot(r, dx)
+    #     second_term = (H @ _outer(dx, dx) @ H) / dxHdx
+    #     return first_term - second_term, "damped BFGS"
+
     """See [5]"""
     dxdg = dx.dot(dg)
     dxHdx = dx.dot(H).dot(dx)
@@ -82,6 +118,29 @@ def double_damp(
     y : np.array, shape (N, ), floats
         Damped gradient differences
     """
+    # if isinstance(H, torch.Tensor):
+    #     s = torch.as_tensor(s, dtype=H.dtype, device=H.device)
+    #     y = torch.as_tensor(y, dtype=H.dtype, device=H.device)
+
+    #     sy  = _dot(s, y)
+    #     Hy  = H @ y
+    #     yHy = _dot(y, Hy)
+
+    #     theta_1 = 1.0
+    #     if sy < mu_1 * yHy:
+    #         theta_1 = (1 - mu_1) * yHy / (yHy - sy)
+    #         s = theta_1 * s + (1 - theta_1) * Hy
+
+    #     # --- 二重 damping ---
+    #     sy   = _dot(s, y)
+    #     ss   = _dot(s, s)
+    #     theta_2 = 1.0
+    #     if mu_2 is not None and sy < mu_2 * ss:
+    #         theta_2 = (1 - mu_2) * ss / (ss - sy)
+    #         y = theta_2 * y + (1 - theta_2) * s
+
+    #     return s, y
+
     sy = s.dot(y)
     # Calculate Hy directly
     if H is not None:
@@ -120,16 +179,40 @@ def double_damp(
 
 
 def sr1_update(z, dx):
+    if isinstance(z, torch.Tensor):
+        return _outer(z, z) / _dot(z, dx), "SR1"
+
     return np.outer(z, z) / z.dot(dx), "SR1"
 
 
 def psb_update(z, dx):
+    if isinstance(z, torch.Tensor):
+        first  = (_outer(dx, z) + _outer(z, dx)) / _dot(dx, dx)
+        second = _dot(dx, z) * _outer(dx, dx) / (_dot(dx, dx) ** 2)
+        return first - second, "PSB"
+
     first_term = (np.outer(dx, z) + np.outer(z, dx)) / dx.dot(dx)
     sec_term = dx.dot(z) * np.outer(dx, dx) / dx.dot(dx) ** 2
     return first_term - sec_term, "PSB"
 
 
 def flowchart_update(H, dx, dg):
+    # if isinstance(H, torch.Tensor):
+    #     dx = torch.as_tensor(dx, dtype=H.dtype, device=H.device)
+    #     dg = torch.as_tensor(dg, dtype=H.dtype, device=H.device)
+
+    #     z          = dg - H @ dx
+    #     sr1_quot   = _dot(z, dx) / (z.norm() * dx.norm())
+    #     bfgs_quot  = _dot(dg, dx) / (dg.norm() * dx.norm())
+
+    #     if sr1_quot < -0.1:
+    #         update, key = sr1_update(z, dx)
+    #     elif bfgs_quot > 0.1:
+    #         update, key = bfgs_update(H, dx, dg)
+    #     else:
+    #         update, key = psb_update(z, dx)
+    #     return update, key
+
     # See [1], Sec. 2, equations 1 to 3
     z = dg - H.dot(dx)
     sr1_quot = z.dot(dx) / (np.linalg.norm(z) * np.linalg.norm(dx))
@@ -158,6 +241,16 @@ def mod_flowchart_update(H, dx, dg):
 
 
 def bofill_update(H, dx, dg):
+    if isinstance(H, torch.Tensor):
+        dx = torch.as_tensor(dx, dtype=H.dtype, device=H.device)
+        dg = torch.as_tensor(dg, dtype=H.dtype, device=H.device)
+
+        z    = dg - H @ dx
+        sr1  = sr1_update(z, dx)[0]
+        psb  = psb_update(z, dx)[0]
+        mix  = (_dot(z, dx) ** 2) / (_dot(z, z) * _dot(dx, dx))
+        return mix * sr1 + (1 - mix) * psb, "Bofill"
+
     z = dg - H.dot(dx)
 
     # Symmetric, rank-one (SR1) update
@@ -176,6 +269,21 @@ def bofill_update(H, dx, dg):
 
 
 def ts_bfgs_update(H, dx, dg):
+    # if isinstance(H, torch.Tensor):
+    #     dx = torch.as_tensor(dx, dtype=H.dtype, device=H.device)[:, None]
+    #     dg = torch.as_tensor(dg, dtype=H.dtype, device=H.device)[:, None]
+    #     j   = dg - H @ dx
+    #     jdx = (j.T @ dx)
+
+    #     w, v = torch.linalg.eigh(H)
+    #     Hdx  = torch.abs(w) * (v @ (v.T @ dx))
+    #     M     = dg @ dg.T + Hdx @ Hdx.T
+    #     dxTM  = dx.T @ M
+    #     u     = torch.linalg.solve(dxTM @ dx, dxTM).T
+    #     juT   = j @ u.T
+    #     update = juT + juT.T - jdx * (u @ u.T)
+    #     return update, "TS-BFGS"
+
     """As described in [7]"""
     dx = dx[:, None]
     dg = dg[:, None]

@@ -11,6 +11,7 @@ from scipy.optimize import bisect
 
 from pysisyphus.constants import AU2KJPERMOL
 
+import torch
 
 def get_curv_vec(H, Gv, v0, w0):
     v0 = v0[:, None]
@@ -210,7 +211,15 @@ def cubic_displ_for_geom(geom, dE=-5e-4):
     # Only project for multi-atomic geometries.
     if geom.coords.size > 3:
         H = geom.eckart_projection(H)
-    w, v = np.linalg.eigh(H)
+    
+    if torch.cuda.is_available():
+        H = torch.tensor(H, device="cuda", dtype=torch.float32)
+        w, v = torch.linalg.eigh(H)
+        w = w.to(torch.double).cpu().numpy()
+        v = v.to(torch.double).cpu().numpy()
+        del H; torch.cuda.empty_cache()
+    else:
+        w, v = np.linalg.eigh(H)
     # Transition vector (imaginary mode) and corresponding eigenvalue
     v0 = v[:, 0]
     w0 = w[0]

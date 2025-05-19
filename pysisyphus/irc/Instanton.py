@@ -18,6 +18,7 @@ from pysisyphus.Geometry import Geometry
 from pysisyphus.helpers import align_coords, get_coords_diffs
 from pysisyphus.helpers_pure import eigval_to_wavenumber
 
+import torch
 
 def T_crossover_from_eigval(eigval):
     nu = eigval_to_wavenumber(eigval)  # in cm⁻¹
@@ -35,7 +36,13 @@ def T_crossover_from_eigval(eigval):
 def T_crossover_from_ts(ts_geom):
     mw_hessian = ts_geom.mw_hessian
     proj_hessian = ts_geom.eckart_projection(mw_hessian, full=True)
-    eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+
+    if isinstance(proj_hessian, torch.Tensor):
+        eigvals, eigvecs = torch.linalg.eigh(proj_hessian)
+        eigvals = eigvals.to(torch.double).cpu().numpy()
+    else:
+        eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+
     T_c = T_crossover_from_eigval(eigvals[0])
     return T_c
 
@@ -99,7 +106,14 @@ class Instanton:
             mw_hessian = ts_geom.mass_weigh_hessian(cart_hessian)
 
         proj_hessian = ts_geom.eckart_projection(mw_hessian, full=True)
-        eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+
+        if isinstance(proj_hessian, torch.Tensor):
+            eigvals, eigvecs = torch.linalg.eigh(proj_hessian)
+            eigvals = eigvals.to(torch.double).cpu().numpy()
+            eigvecs = eigvecs.to(torch.double).cpu().numpy()
+        else:
+            eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+
         # Use crossover temperature with a little offset (delta_T) if no T is given.
         try:
             kwargs["T"]

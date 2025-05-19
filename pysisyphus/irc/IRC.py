@@ -26,6 +26,8 @@ from pysisyphus.optimizers.guess_hessians import get_guess_hessian
 from pysisyphus.TablePrinter import TablePrinter
 from pysisyphus.xyzloader import make_trj_str, make_xyz_str
 
+import torch
+
 
 class IRC:
     valid_displs = ("energy", "length", "energy_cubic")
@@ -320,10 +322,22 @@ class IRC:
         # Don't project single atom species and analytical potentials
         else:
             proj_hessian = mw_hessian
-            P = np.eye(self.coords.size)
-        eigvals, eigvecs = np.linalg.eigh(proj_hessian)
-        mw_cart_displs = P.T.dot(eigvecs)
-        cart_displs = self.geometry.mm_sqrt_inv.dot(mw_cart_displs)
+            if isinstance(proj_hessian, torch.Tensor):
+                P = torch.eye(self.coords.size, device=proj_hessian.device, dtype=proj_hessian.dtype)
+            else:
+                P = np.eye(self.coords.size)
+
+        if isinstance(proj_hessian, torch.Tensor):
+            eigvals, eigvecs = torch.linalg.eigh(proj_hessian)
+            eigvals = eigvals.to(torch.double).cpu().numpy()
+            mw_cart_displs = P.T @ eigvecs
+            mm_sqrt_inv = torch.tensor(self.geometry.mm_sqrt_inv, device=proj_hessian.device, dtype=proj_hessian.dtype)
+            cart_displs = mm_sqrt_inv @ mw_cart_displs
+        else:
+            eigvals, eigvecs = np.linalg.eigh(proj_hessian)    
+            mw_cart_displs = P.T.dot(eigvecs)
+            cart_displs = self.geometry.mm_sqrt_inv.dot(mw_cart_displs)
+
         nus = eigval_to_wavenumber(eigvals)
         nu_root = nus[self.root]
         assert nu_root <= self.imag_below, (
@@ -346,9 +360,13 @@ class IRC:
 
         # Mass-weighted
         mw_trans_vec = mw_cart_displs[:, self.root]
+        if isinstance(mw_trans_vec, torch.Tensor):
+            mw_trans_vec = mw_trans_vec.cpu().numpy()
         self.mw_transition_vector = mw_trans_vec
         # Not mass-weighted
         trans_vec = cart_displs[:, self.root]
+        if isinstance(trans_vec, torch.Tensor):
+            trans_vec = trans_vec.cpu().numpy()
         self.transition_vector = trans_vec / np.linalg.norm(trans_vec)
 
         if self.downhill:
@@ -387,17 +405,17 @@ class IRC:
                 self.log("Calculating 3rd derivatives via finite differences.")
                 Gv, third_deriv_res = third_deriv_fd(self.geometry, mw_trans_vec)
                 self.log("Finished calculation of 3rd derivatives.")
-                h5_fn = self.get_path_for_fn("third_deriv.h5")
-                save_third_deriv(
-                    h5_fn,
-                    self.geometry,
-                    third_deriv_res,
-                    H_mw=mw_hessian,
-                    H_proj=proj_hessian,
-                )
+                # h5_fn = self.get_path_for_fn("third_deriv.h5")
+                # save_third_deriv(
+                #     h5_fn,
+                #     self.geometry,
+                #     third_deriv_res,
+                #     H_mw=mw_hessian,
+                #     H_proj=proj_hessian,
+                # )
                 mw_step_plus, mw_step_minus = cubic_displ(
-                    proj_hessian,
-                    eigvecs[:, self.root],
+                    proj_hessian.cpu().numpy(),
+                    eigvecs[:, self.root].cpu().numpy(),
                     min_eigval,
                     Gv,
                     -self.displ_energy,
@@ -560,10 +578,10 @@ class IRC:
                 break_msg = "Energy converged!"
                 self.converged = True
 
-            dumped = (self.cur_cycle % self.dump_every) == 0
-            if dumped:
-                dump_fn = self.get_path_for_fn(f"{direction}_{self.dump_fn}")
-                self.dump_data(dump_fn)
+            # dumped = (self.cur_cycle % self.dump_every) == 0
+            # if dumped:
+            #     dump_fn = self.get_path_for_fn(f"{direction}_{self.dump_fn}")
+            #     self.dump_data(dump_fn)
 
             if break_msg:
                 self.table.print(break_msg)
@@ -584,8 +602,8 @@ class IRC:
             self.irc_mw_coords.reverse()
             self.irc_mw_gradients.reverse()
 
-        if not dumped:
-            self.dump_data(dump_fn)
+        # if not dumped:
+        #     self.dump_data(dump_fn)
 
         self.cur_direction = None
         self.trj_handle.close()
@@ -658,7 +676,7 @@ class IRC:
             self.geometry,
             self.hessian_init,
             cart_gradient=self.ts_gradient,
-            h5_fn=self.get_path_for_fn("hess_init_irc.h5"),
+            h5_fn=None,
         )
         self.log(f"Initial hessian: {hess_str}")
 
@@ -704,9 +722,9 @@ class IRC:
         if not self.downhill:
             self.dump_ends(".", "finished", trj=True)
 
-            # Dump the whole IRC to HDF5
-            dump_fn = self.get_path_for_fn("finished_" + self.dump_fn)
-            self.dump_data(dump_fn, full=True)
+        #     # Dump the whole IRC to HDF5
+        #     dump_fn = self.get_path_for_fn("finished_" + self.dump_fn)
+        #     self.dump_data(dump_fn, full=True)
 
         # Convert to arrays
         [

@@ -26,6 +26,8 @@ from pysisyphus.irc.DWI import DWI
 from pysisyphus.irc.IRC import IRC
 from pysisyphus.optimizers.hessian_updates import bfgs_update, bofill_update
 
+import torch
+
 
 class EulerPC(IRC):
     def __init__(
@@ -77,7 +79,10 @@ class EulerPC(IRC):
         energy = self.energy
 
         # Store starting information for distances weighted interpolation
-        self.dwi.update(self.mw_coords, energy, mw_grad, self.mw_hessian.copy())
+        if isinstance(self.mw_hessian, torch.Tensor):
+            self.dwi.update(self.mw_coords, energy, mw_grad, self.mw_hessian.detach().clone())
+        else:
+            self.dwi.update(self.mw_coords, energy, mw_grad, self.mw_hessian.copy())
 
         if self.downhill:
             return
@@ -109,8 +114,8 @@ class EulerPC(IRC):
         if self.cur_cycle > 0:
             if self.hessian_recalc and (self.cur_cycle % self.hessian_recalc == 0):
                 self.mw_hessian = self.geometry.mw_hessian
-                h5_fn = f"hess_calc_irc_{self.direction}_cyc{self.cur_cycle}.h5"
-                save_hessian(self.get_path_for_fn(h5_fn), self.geometry)
+                # h5_fn = f"hess_calc_irc_{self.direction}_cyc{self.cur_cycle}.h5"
+                # save_hessian(self.get_path_for_fn(h5_fn), self.geometry)
                 self.log("Calculated excact hessian")
             else:
                 dx = self.mw_coords - self.irc_mw_coords[-2]
@@ -118,9 +123,14 @@ class EulerPC(IRC):
                 dH, key = self.hessian_update_func(self.mw_hessian, dx, dg)
                 self.mw_hessian += dH
                 self.log(f"Did {key} hessian update before predictor step.")
-            self.dwi.update(
-                self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.copy()
-            )
+            if isinstance(self.mw_hessian, torch.Tensor):
+                self.dwi.update(
+                    self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.detach().clone()
+                )
+            else:
+                self.dwi.update(
+                    self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.copy()
+                )
 
         # Create a copy of the inital coordinates for the determination
         # of the actual step size in the predictor Euler integration.
@@ -135,7 +145,11 @@ class EulerPC(IRC):
 
         def taylor_gradient(step):
             """Return gradient from Taylor expansion of energy to 2nd order."""
-            return mw_grad + self.mw_hessian @ step
+            if isinstance(self.mw_hessian, torch.Tensor):
+                step_t = torch.tensor(step, dtype=self.mw_hessian.dtype, device=self.mw_hessian.device)
+                return mw_grad + (self.mw_hessian @ step_t).cpu().numpy()
+            else:
+                return mw_grad + self.mw_hessian @ step
 
         # These variables will hold the coordinates and gradients along
         # the Euler integration and will be updated frequently.
@@ -213,7 +227,10 @@ class EulerPC(IRC):
         dH, key = self.hessian_update_func(self.mw_hessian, dx, dg)
         self.mw_hessian += dH
         self.log(f"Did {key} hessian update after predictor step.\n")
-        self.dwi.update(self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.copy())
+        if isinstance(self.mw_hessian, torch.Tensor):
+            self.dwi.update(self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.detach().clone())
+        else:
+            self.dwi.update(self.mw_coords.copy(), energy, mw_grad, self.mw_hessian.copy())
         if self.dump_dwi:
             self.dwi.dump(
                 f"dwi_{self.cur_direction}_{self.cur_cycle:0{self.cycle_places}d}.h5"
