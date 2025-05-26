@@ -32,7 +32,7 @@ from pysisyphus.io import (
     geom_from_mol2,
     geom_from_pdb,
     geom_from_qcschema,
-    save_hessian as save_h5_hessian,
+    # save_hessian as save_h5_hessian,
     geom_from_zmat_fn,
     geoms_from_inline_xyz,
     geom_from_pubchem_name,
@@ -43,6 +43,7 @@ from pysisyphus.thermo import (
 )
 from pysisyphus.xyzloader import parse_xyz_file, parse_trj_file, make_trj_str
 
+import torch
 
 def geom_from_xyz_file(xyz_fn, coord_type="cart", **coord_kwargs):
     kwargs = {
@@ -498,7 +499,11 @@ def do_final_hessian(
     mw_hessian = geom.mass_weigh_hessian(hessian)
     print("... doing Eckart-projection")
     proj_hessian = geom.eckart_projection(mw_hessian)
-    eigvals, _ = np.linalg.eigh(proj_hessian)
+    if isinstance(proj_hessian, torch.Tensor):
+        eigvals, _ = torch.linalg.eigh(proj_hessian)
+        eigvals = eigvals.cpu().numpy()
+    else:
+        eigvals, _ = np.linalg.eigh(proj_hessian)
 
     neg_inds = eigvals < ev_thresh
     neg_eigvals = eigvals[neg_inds]
@@ -514,11 +519,11 @@ def do_final_hessian(
     if prefix:
         prefix = f"{prefix}_"
 
-    # Dump HDF Hessian
-    if save_hessian:
-        final_h5_hessian_fn = prefix + "final_hessian.h5"
-        save_h5_hessian(out_dir / final_h5_hessian_fn, geom)
-        print(f"Wrote Hessian data HD5 file '{final_h5_hessian_fn}'.")
+    # # Dump HDF Hessian
+    # if save_hessian:
+    #     final_h5_hessian_fn = prefix + "final_hessian.h5"
+    #     save_h5_hessian(out_dir / final_h5_hessian_fn, geom)
+    #     print(f"Wrote Hessian data HD5 file '{final_h5_hessian_fn}'.")
 
     imag_fns = list()
     if write_imag_modes:
@@ -585,7 +590,10 @@ def imag_modes_from_geom(geom, freq_thresh=-10, points=10, displ=None):
 
     # We don't want to do start any calculation here, so we directly access
     # the attribute underlying the geom.hessian property.
-    nus, _, _, cart_displs = geom.get_normal_modes(geom._hessian)
+    hessian = geom._hessian
+    if isinstance(hessian, torch.Tensor):
+        hessian = hessian.cpu().numpy()
+    nus, _, _, cart_displs = geom.get_normal_modes(hessian)
     below_thresh = nus < freq_thresh
 
     imag_modes = list()
