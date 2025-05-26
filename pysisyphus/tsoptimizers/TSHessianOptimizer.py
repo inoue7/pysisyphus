@@ -12,6 +12,7 @@ from pysisyphus.optimizers.guess_hessians import ts_hessian, HessInit
 from pysisyphus.optimizers.HessianOptimizer import HessianOptimizer, HessUpdate
 from pysisyphus.optimizers.Optimizer import get_data_model, get_h5_group
 
+import torch
 
 class TSHessianOptimizer(HessianOptimizer):
     """Optimizer to find first-order saddle points."""
@@ -227,7 +228,11 @@ class TSHessianOptimizer(HessianOptimizer):
         # Determiniation of initial mode either by using a provided
         # reference hessian, or by using a supplied root.
 
-        eigvals, eigvecs = np.linalg.eigh(self.H)
+        if isinstance(self.H, torch.Tensor):
+            eigvals, eigvecs = torch.linalg.eigh(self.H)
+            eigvals = eigvals.cpu().numpy()
+        else:
+            eigvals, eigvecs = np.linalg.eigh(self.H)
         neg_inds = eigvals < -self.small_eigval_thresh
         self.log_negative_eigenvalues(eigvals, "Initial ")
 
@@ -339,7 +344,11 @@ class TSHessianOptimizer(HessianOptimizer):
 
         # Select new TS mode according to biggest overlap with previous TS mode.
         self.log(f"Overlaps of previous TS mode with current {infix}mode(s):")
-        ovlps = np.abs(np.einsum("ij,ki->kj", ovlp_eigvecs, self.ts_modes))
+        if isinstance(eigvecs, torch.Tensor):
+            ovlps = torch.abs(torch.einsum("ij,ki->kj", ovlp_eigvecs, self.ts_modes))
+            ovlps = ovlps.cpu().numpy()
+        else:
+            ovlps = np.abs(np.einsum("ij,ki->kj", ovlp_eigvecs, self.ts_modes))
         for i, ovlp in enumerate(ovlps):
             self.log(f"\tTS mode {i:02d}: {np.array2string(ovlp, precision=3)}")
         max_ovlp_inds = np.argmax(ovlps, axis=1)

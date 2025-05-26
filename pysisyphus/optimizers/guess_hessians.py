@@ -22,6 +22,7 @@ from pysisyphus.intcoords.PrimTypes import PrimTypes as PT, Bonds, Bends, Dihedr
 from pysisyphus.intcoords.setup import get_pair_covalent_radii
 from pysisyphus.io.hessian import save_hessian
 
+import torch
 
 HessInit = Literal[
     "calc", "unit", "fischer", "lindh", "simple", "swart", "xtb", "xtb1", "xtbff"
@@ -275,8 +276,8 @@ def get_guess_hessian(
         H = geometry.hessian
         hess_str = "saved"
 
-    if (h5_fn is not None) and (hessian_init == "calc"):
-        save_hessian(h5_fn, geometry)
+    # if (h5_fn is not None) and (hessian_init == "calc"):
+    #     save_hessian(h5_fn, geometry)
 
     if model_hessian and target_coord_type == "cart":
         if cart_gradient is not None:

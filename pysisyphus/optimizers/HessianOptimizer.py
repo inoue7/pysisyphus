@@ -8,7 +8,7 @@ from scipy.optimize import root_scalar
 from pysisyphus.cos.ChainOfStates import ChainOfStates
 from pysisyphus.Geometry import Geometry
 from pysisyphus.helpers_pure import rms
-from pysisyphus.io.hessian import save_hessian
+# from pysisyphus.io.hessian import save_hessian
 from pysisyphus.optimizers.guess_hessians import (
     get_guess_hessian,
     xtb_hessian,
@@ -26,6 +26,7 @@ from pysisyphus.optimizers.hessian_updates import (
 from pysisyphus.optimizers.Optimizer import Optimizer
 from pysisyphus.optimizers.exceptions import OptimizationError
 
+import torch
 
 def dummy_hessian_update(H, dx, dg):
     return np.zeros_like(H), "no"
@@ -212,22 +213,22 @@ class HessianOptimizer(Optimizer):
             hessian_init = "fischer"
         self.prepare_opt(hessian_init)
 
-    def save_hessian(self):
-        # Don't try to save Hessians of analytical potentials
-        if self.geometry.is_analytical_2d:
-            return
+    # def save_hessian(self):
+    #     # Don't try to save Hessians of analytical potentials
+    #     if self.geometry.is_analytical_2d:
+    #         return
 
-        h5_fn = self.get_path_for_fn(f"hess_calc_cyc_{self.cur_cycle}.h5")
-        # Save the cartesian hessian, as it is independent of the
-        # actual coordinate system that is used.
-        save_hessian(
-            h5_fn,
-            self.geometry,
-            self.geometry.cart_hessian,
-            self.geometry.energy,
-            self.geometry.calculator.mult,
-        )
-        self.log(f"Wrote calculated cartesian Hessian to '{h5_fn}'")
+    #     h5_fn = self.get_path_for_fn(f"hess_calc_cyc_{self.cur_cycle}.h5")
+    #     # Save the cartesian hessian, as it is independent of the
+    #     # actual coordinate system that is used.
+    #     save_hessian(
+    #         h5_fn,
+    #         self.geometry,
+    #         self.geometry.cart_hessian,
+    #         self.geometry.energy,
+    #         self.geometry.calculator.mult,
+    #     )
+    #     self.log(f"Wrote calculated cartesian Hessian to '{h5_fn}'")
 
     def prepare_opt(self, hessian_init=None):
         if hessian_init is None:
@@ -243,9 +244,9 @@ class HessianOptimizer(Optimizer):
             msg += f" from '{hessian_init}'"
         self.log(msg)
 
-        # Dump to disk if hessian was calculated
-        if self.hessian_init == "calc":
-            self.save_hessian()
+        # # Dump to disk if hessian was calculated
+        # if self.hessian_init == "calc":
+        #     self.save_hessian()
 
         if (
             hasattr(self.geometry, "coord_type")
@@ -371,7 +372,7 @@ class HessianOptimizer(Optimizer):
             else:
                 self.H = self.geometry.hessian
                 key = "exact"
-                self.save_hessian()
+                # self.save_hessian()
             if not (self.cur_cycle == 0):
                 self.log(f"Recalculated {key} Hessian in cycle {self.cur_cycle}.")
             # Reset counter. It is also reset when the recalculation was initiated
@@ -393,11 +394,17 @@ class HessianOptimizer(Optimizer):
     def solve_rfo(self, rfo_mat, kind="min", prev_eigvec=None):
         # When using the restricted step variant of RFO the RFO matrix
         # may not be symmetric. Thats why we can't use eigh here.
-        eigenvalues, eigenvectors = np.linalg.eig(rfo_mat)
+        if isinstance(rfo_mat, torch.Tensor):
+            eigenvalues, eigenvectors = torch.linalg.eig(rfo_mat) # heavy-compute
+        else:
+            eigenvalues, eigenvectors = np.linalg.eig(rfo_mat)
         self.log("\tdiagonalized augmented Hessian")
         eigenvalues = eigenvalues.real
         eigenvectors = eigenvectors.real
-        sorted_inds = np.argsort(eigenvalues)
+        if isinstance(eigenvectors, torch.Tensor):
+            sorted_inds = torch.argsort(eigenvalues)
+        else:
+            sorted_inds = np.argsort(eigenvalues)
 
         # Depending on wether we want to minimize (maximize) along
         # the mode(s) in the rfo mat we have to select the smallest
@@ -416,7 +423,10 @@ class HessianOptimizer(Optimizer):
                 f"Naive: {naive_ind} ({eigenvalues[naive_ind]:.6f})"
             )
         follow_eigvec = eigenvectors.T[ind]
-        step_nu = follow_eigvec.copy()
+        if isinstance(follow_eigvec, torch.Tensor):
+            step_nu = follow_eigvec.clone()
+        else:
+            step_nu = follow_eigvec.copy()
         nu = step_nu[-1]
         self.log(f"\tnu_{verbose}={nu:.8e}")
         # Scale eigenvector so that its last element equals 1. The
@@ -455,11 +465,13 @@ class HessianOptimizer(Optimizer):
         if needed. Return energy, gradient and hessian for the current cycle."""
         gradient = self.geometry.gradient
         energy = self.geometry.energy
-        self.forces.append(-gradient)
         self.energies.append(energy)
         self.log(f"    Energy: {energy: >12.6f} au")
         self.log(f"norm(grad): {np.linalg.norm(gradient): >12.6f} au / bohr (rad)")
         self.log(f" rms(grad): {np.sqrt(np.mean(gradient**2)): >12.6f} au / bohr (rad)")
+        self.forces.append(-gradient)
+        if isinstance(self.H, torch.Tensor):
+            gradient = torch.from_numpy(gradient).to(self.H.device, self.H.dtype)
 
         can_update = (
             # Allows gradient differences
@@ -483,7 +495,11 @@ class HessianOptimizer(Optimizer):
             # Symmetrize hessian, as the projection may break it?!
             H = (H_proj + H_proj.T) / 2
 
-        eigvals, eigvecs = np.linalg.eigh(H)
+        if isinstance(H, torch.Tensor):
+            eigvals, eigvecs = torch.linalg.eigh(H)
+            eigvals = eigvals.cpu().numpy()
+        else:
+            eigvals, eigvecs = np.linalg.eigh(H)
         # Neglect small eigenvalues
         eigvals, eigvecs = self.filter_small_eigvals(eigvals, eigvecs)
 
@@ -491,9 +507,14 @@ class HessianOptimizer(Optimizer):
         return energy, gradient, H, eigvals, eigvecs, resetted
 
     def get_augmented_hessian(self, eigvals, gradient, alpha=1.0):
-        dim_ = eigvals.size + 1
-        H_aug = np.zeros((dim_, dim_))
-        H_aug[: dim_ - 1, : dim_ - 1] = np.diag(eigvals / alpha)
+        if isinstance(gradient, torch.Tensor):
+            dim_ = eigvals.size(0) + 1
+            H_aug = torch.zeros((dim_, dim_), device=gradient.device, dtype=gradient.dtype)
+            H_aug[: dim_ - 1, : dim_ - 1] = torch.diag(eigvals / alpha)
+        else:
+            dim_ = eigvals.size + 1
+            H_aug = np.zeros((dim_, dim_))
+            H_aug[: dim_ - 1, : dim_ - 1] = np.diag(eigvals / alpha)
         H_aug[-1, :-1] = gradient
         H_aug[:-1, -1] = gradient
 
@@ -505,7 +526,10 @@ class HessianOptimizer(Optimizer):
         # Derivative of the squared step w.r.t. alpha
         numer = gradient**2
         denom = (eigvals - rfo_eigval * cur_alpha) ** 3
-        quot = np.sum(numer / denom)
+        if isinstance(gradient, torch.Tensor):
+            quot = torch.sum(numer / denom)
+        else:
+            quot = np.sum(numer / denom)
         self.log(f"quot={quot:.6f}")
         dstep2_dalpha = 2 * rfo_eigval / (1 + step_norm**2 * cur_alpha) * quot
         self.log(f"analytic deriv.={dstep2_dalpha:.6f}")
@@ -519,16 +543,22 @@ class HessianOptimizer(Optimizer):
 
     def get_rs_step(self, eigvals, eigvecs, gradient, name="RS"):
         # Transform gradient to basis of eigenvectors
-        gradient_ = eigvecs.T.dot(gradient)
+        if isinstance(eigvecs, torch.Tensor):
+            gradient_ = eigvecs.T @ gradient
+        else:
+            gradient_ = eigvecs.T.dot(gradient)
 
         alpha = self.alpha0
         for mu in range(self.max_micro_cycles):
             self.log(f"{name} micro cycle {mu:02d}, alpha={alpha:.6f}")
             H_aug = self.get_augmented_hessian(eigvals, gradient_, alpha)
-            rfo_step_, eigval_min, nu, self.prev_eigvec_min = self.solve_rfo(
+            rfo_step_, eigval_min, nu, self.prev_eigvec_min = self.solve_rfo( # heavy-compute
                 H_aug, "min", prev_eigvec=self.prev_eigvec_min
             )
-            rfo_norm_ = np.linalg.norm(rfo_step_)
+            if isinstance(rfo_step_, torch.Tensor):
+                rfo_norm_ = torch.linalg.norm(rfo_step_)
+            else:
+                rfo_norm_ = np.linalg.norm(rfo_step_)
             self.log(f"norm(rfo step)={rfo_norm_:.6f}")
 
             if (rfo_norm_ < self.trust_radius) or abs(
@@ -568,7 +598,10 @@ class HessianOptimizer(Optimizer):
                 step_ = rfo_step_
 
         # Transform step back to original basis
-        step = eigvecs.dot(step_)
+        if isinstance(eigvecs, torch.Tensor):
+            step = eigvecs @ step_
+        else:
+            step = eigvecs.dot(step_)
         return step
 
     @staticmethod
@@ -679,7 +712,10 @@ class HessianOptimizer(Optimizer):
 
     @staticmethod
     def quadratic_model(gradient, hessian, step):
-        return step.dot(gradient) + 0.5 * step.dot(hessian).dot(step)
+        if isinstance(gradient, torch.Tensor):
+            return step @ gradient + 0.5 * step @ hessian @ step
+        else:
+            return step.dot(gradient) + 0.5 * step.dot(hessian).dot(step)
 
     @staticmethod
     def rfo_model(gradient, hessian, step):
