@@ -12,6 +12,7 @@ from pysisyphus.optimizers.guess_hessians import ts_hessian, HessInit
 from pysisyphus.optimizers.HessianOptimizer import HessianOptimizer, HessUpdate
 from pysisyphus.optimizers.Optimizer import get_data_model, get_h5_group
 
+from pysisyphus.helpers import array2string
 import torch
 
 class TSHessianOptimizer(HessianOptimizer):
@@ -245,7 +246,7 @@ class TSHessianOptimizer(HessianOptimizer):
             assert eigvals_ref[0] < -self.small_eigval_thresh
             ref_mode = eigvecs_ref[:, 0]
             overlaps = np.einsum("ij,j->i", eigvecs.T, ref_mode)
-            ovlp_str = np.array2string(overlaps, precision=4)
+            ovlp_str = array2string(overlaps, precision=4)
             self.log(
                 "Overlaps between eigenvectors of current Hessian "
                 f"TS mode from reference Hessian:"
@@ -279,7 +280,7 @@ class TSHessianOptimizer(HessianOptimizer):
                     )
                 mode /= np.linalg.norm(mode)
                 modes.append(mode)
-                mode_str = np.array2string(mode, precision=2)
+                mode_str = array2string(mode, precision=2)
                 self.log(f"Normalized reference mode {i:02d}: {mode_str}")
 
             # Calculate overlaps in non-redundant subspace by zeroing overlaps
@@ -314,7 +315,7 @@ class TSHessianOptimizer(HessianOptimizer):
         self.ts_mode_eigvals = eigvals[self.roots]
         self.log(
             f"Using root(s) {self.roots} with eigenvalues "
-            f"{np.array2string(self.ts_mode_eigvals, precision=6)} as TS mode.\n"
+            f"{array2string(self.ts_mode_eigvals, precision=6)} as TS mode.\n"
         )
 
     def update_ts_mode(self, eigvals, eigvecs):
@@ -350,7 +351,7 @@ class TSHessianOptimizer(HessianOptimizer):
         else:
             ovlps = np.abs(np.einsum("ij,ki->kj", ovlp_eigvecs, self.ts_modes))
         for i, ovlp in enumerate(ovlps):
-            self.log(f"\tTS mode {i:02d}: {np.array2string(ovlp, precision=3)}")
+            self.log(f"\tTS mode {i:02d}: {array2string(ovlp, precision=3)}")
         max_ovlp_inds = np.argmax(ovlps, axis=1)
         for i, _ in enumerate(self.ts_modes):
             max_ovlp_ind = max_ovlp_inds[i].argmax()

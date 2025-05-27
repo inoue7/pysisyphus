@@ -508,12 +508,12 @@ def do_final_hessian(
     neg_inds = eigvals < ev_thresh
     neg_eigvals = eigvals[neg_inds]
     neg_num = sum(neg_inds)
-    eigval_str = np.array2string(eigvals[:10], precision=4)
+    eigval_str = array2string(eigvals[:10], precision=4)
     print()
     print("First 10 eigenvalues", eigval_str)
     if neg_num > 0:
         wavenumbers = eigval_to_wavenumber(neg_eigvals)
-        wavenum_str = np.array2string(wavenumbers, precision=2)
+        wavenum_str = array2string(wavenumbers, precision=2)
         print("Imaginary frequencies:", wavenum_str, "cm⁻¹")
 
     if prefix:
@@ -628,3 +628,15 @@ def simple_peaks(data):
     peaks = np.array(peaks, dtype=int)
     vals = np.array(data)[peaks]
     return peaks, vals
+
+
+def array2string(arr, precision=None, suppress_small=None):
+    """Similar to np.array2string, but able to handle torch tensors.
+    Only implement used parameters in pysisyphus."""
+    if isinstance(arr, torch.Tensor):
+        arr = arr.cpu().numpy()
+    return np.array2string(
+        arr,
+        precision=precision,
+        suppress_small=suppress_small,
+    )

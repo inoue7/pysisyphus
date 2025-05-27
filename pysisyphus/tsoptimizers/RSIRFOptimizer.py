@@ -32,8 +32,8 @@ class RSIRFOptimizer(TSHessianOptimizer):
                 P -= 2 * np.outer(trans_vec, trans_vec)
             H_star = P.dot(H)
             eigvals_, eigvecs_ = np.linalg.eigh(H_star)
-            # Neglect small eigenvalues
-            eigvals_, eigvecs_ = self.filter_small_eigvals(eigvals_, eigvecs_)
+        # Neglect small eigenvalues
+        eigvals_, eigvecs_ = self.filter_small_eigvals(eigvals_, eigvecs_)
 
         if isinstance(H, torch.Tensor):
             grad_star = P @ gradient

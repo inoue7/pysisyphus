@@ -26,6 +26,7 @@ from pysisyphus.optimizers.hessian_updates import (
 from pysisyphus.optimizers.Optimizer import Optimizer
 from pysisyphus.optimizers.exceptions import OptimizationError
 
+from pysisyphus.helpers import array2string
 import torch
 
 def dummy_hessian_update(H, dx, dg):
@@ -437,7 +438,10 @@ class HessianOptimizer(Optimizer):
         return step, eigval, nu, follow_eigvec
 
     def filter_small_eigvals(self, eigvals, eigvecs, mask=False):
-        small_inds = np.abs(eigvals) < self.small_eigval_thresh
+        if isinstance(eigvals, torch.Tensor):
+            small_inds = torch.abs(eigvals) < self.small_eigval_thresh
+        else:
+            small_inds = np.abs(eigvals) < self.small_eigval_thresh
         eigvals = eigvals[~small_inds]
         eigvecs = eigvecs[:, ~small_inds]
         small_num = sum(small_inds)
@@ -456,7 +460,7 @@ class HessianOptimizer(Optimizer):
 
     def log_negative_eigenvalues(self, eigvals, pre_str=""):
         neg_inds = eigvals < -self.small_eigval_thresh
-        neg_eigval_str = np.array2string(eigvals[neg_inds], precision=6)
+        neg_eigval_str = array2string(eigvals[neg_inds], precision=6)
         self.log(f"{pre_str}Hessian has {neg_inds.sum()} negative eigenvalue(s).")
         self.log(f"\t{neg_eigval_str}")
 
@@ -497,7 +501,6 @@ class HessianOptimizer(Optimizer):
 
         if isinstance(H, torch.Tensor):
             eigvals, eigvecs = torch.linalg.eigh(H)
-            eigvals = eigvals.cpu().numpy()
         else:
             eigvals, eigvecs = np.linalg.eigh(H)
         # Neglect small eigenvalues
@@ -580,7 +583,10 @@ class HessianOptimizer(Optimizer):
             )
             H_aug = self.get_augmented_hessian(eigvals, gradient_, alpha=1.0)
             rfo_step_, eigval_min, nu, _ = self.solve_rfo(H_aug, "min")
-            rfo_norm_ = np.linalg.norm(rfo_step_)
+            if isinstance(rfo_step_, torch.Tensor):
+                rfo_norm_ = torch.linalg.norm(rfo_step_)
+            else:
+                rfo_norm_ = np.linalg.norm(rfo_step_)
 
             # This should always be True if the above algorithm failed but we
             # keep this line nonetheless,  to make it more obvious.
@@ -617,15 +623,18 @@ class HessianOptimizer(Optimizer):
 
         See Nocedal 4.3 Iterative solutions of the subproblem
         """
-        min_ind = eigvals.argmin()
-        min_eigval = eigvals[min_ind]
-        pos_definite = (eigvals > 0.0).all()
-        gradient_trans = eigvecs.T.dot(gradient)
+        min_ind = eigvals.argmin() if isinstance(eigvals, np.ndarray) else torch.argmin(eigvals).item()
+        min_eigval = eigvals[min_ind] if isinstance(eigvals, np.ndarray) else eigvals[min_ind].item()
+        pos_definite = (eigvals > 0.0).all() if isinstance(eigvals, np.ndarray) else (eigvals > 0.0).all().item()
+        if isinstance(eigvecs, torch.Tensor):
+            gradient_trans = eigvecs.T @ gradient
+        else:
+            gradient_trans = eigvecs.T.dot(gradient)
 
         # This will be also be True when we come close to a minimizer,
         # but then the Hessian will also be positive definite and a
         # simple Newton step will be used.
-        hard_case = abs(gradient_trans[min_ind]) <= 1e-6
+        hard_case = abs(gradient_trans[min_ind]) <= 1e-6 if isinstance(eigvals, np.ndarray) else abs(gradient_trans[min_ind]).item() <= 1e-6
         self.log(f"Smallest eigenvalue: {min_eigval:.6f}")
         self.log(f"Positive definite Hessian: {pos_definite}")
         self.log(f"Hard case: {hard_case}")
@@ -633,24 +642,36 @@ class HessianOptimizer(Optimizer):
         def get_step(shift):
             return -gradient_trans / (eigvals + shift)
 
-        # Unshifted Newton step
-        newton_step_trans = get_step(0.0)
-        newton_norm = np.linalg.norm(newton_step_trans)
-
-        def on_trust_radius_lin(step):
-            return 1 / self.trust_radius - 1 / np.linalg.norm(step)
-
         def finalize_step(shift):
             step = get_step(shift)
             if transform:
-                step = eigvecs.dot(step)
+                if isinstance(step, torch.Tensor):
+                    step = eigvecs @ step
+                else:
+                    step = eigvecs.dot(step)
             return step
+
+        def on_trust_radius_lin(step):
+            if isinstance(step, torch.Tensor):
+                return 1 / self.trust_radius - 1 / torch.linalg.norm(step).cpu().item()
+            else:
+                return 1 / self.trust_radius - 1 / np.linalg.norm(step)
+
+        # Unshifted Newton step
+        newton_step_trans = get_step(0.0)
+        if isinstance(eigvals, torch.Tensor):
+            newton_norm = torch.linalg.norm(newton_step_trans).item()
+        else:
+            newton_norm = np.linalg.norm(newton_step_trans)
 
         # Simplest case. Positive definite Hessian and predicted step is
         # already in trust radius.
         if pos_definite and newton_norm <= self.trust_radius:
             self.log("Using unshifted Newton step.")
-            return eigvecs.dot(newton_step_trans)
+            if isinstance(eigvecs, torch.Tensor):
+                return eigvecs @ newton_step_trans
+            else: 
+                return eigvecs.dot(newton_step_trans)
 
         # If the Hessian is not positive definite or if the step is too
         # long we have to determine the shift parameter lambda.
@@ -690,13 +711,18 @@ class HessianOptimizer(Optimizer):
         # a suitable length, but the (shifted) Hessian would have an incorrect
         # eigenvalue spectrum (not positive definite). To solve this we use a
         # different formula to calculate the step.
-        mask = np.ones_like(gradient_trans)
+        if isinstance(eigvals, torch.Tensor):
+            mask = torch.ones_like(gradient_trans, device=gradient_trans.device, dtype=torch.bool)
+        else:
+            mask = np.ones_like(gradient_trans)
         mask[min_ind] = 0
-        mask = mask.astype(bool)
+        mask = mask.astype(bool) if isinstance(mask, np.ndarray) else mask.bool()
         without_min = gradient_trans[mask] / (eigvals[mask] - min_eigval)
         try:
             tau = sqrt(self.trust_radius**2 - (without_min**2).sum())
             step_trans = [tau] + (-without_min).tolist()
+            if isinstance(eigvecs, torch.Tensor):
+                step_trans = torch.tensor(step_trans, device=eigvecs.device, dtype=eigvecs.dtype)
         # Hard case. Search in open interval (endpoints not included)
         # (-min_eigval, inf).
         except ValueError:
@@ -708,7 +734,10 @@ class HessianOptimizer(Optimizer):
         if not transform:
             return step_trans
 
-        return eigvecs.dot(step_trans)
+        if isinstance(eigvecs, torch.Tensor):
+            return eigvecs @ step_trans
+        else:
+            return eigvecs.dot(step_trans)
 
     @staticmethod
     def quadratic_model(gradient, hessian, step):
