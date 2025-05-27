@@ -416,9 +416,12 @@ class HessianOptimizer(Optimizer):
         if prev_eigvec is None:
             ind = sorted_inds[first_or_last]
         else:
-            ovlps = np.array([prev_eigvec.dot(ev) for ev in eigenvectors.T])
+            if isinstance(prev_eigvec, torch.Tensor):
+                ovlps = prev_eigvec.matmul(eigenvectors)
+            else:
+                ovlps = np.array([prev_eigvec.dot(ev) for ev in eigenvectors.T])
             naive_ind = sorted_inds[first_or_last]
-            ind = np.abs(ovlps).argmax()
+            ind = np.abs(ovlps).argmax() if isinstance(ovlps, np.ndarray) else torch.argmax(torch.abs(ovlps)).item()
             self.log(
                 f"Overlap: {ind} ({eigenvalues[ind]:.6f}), "
                 f"Naive: {naive_ind} ({eigenvalues[naive_ind]:.6f})"
