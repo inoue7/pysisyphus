@@ -591,13 +591,12 @@ def imag_modes_from_geom(geom, freq_thresh=-10, points=10, displ=None):
     # We don't want to do start any calculation here, so we directly access
     # the attribute underlying the geom.hessian property.
     hessian = geom._hessian
-    if isinstance(hessian, torch.Tensor):
-        hessian = hessian.cpu().numpy()
     nus, _, _, cart_displs = geom.get_normal_modes(hessian)
     below_thresh = nus < freq_thresh
 
     imag_modes = list()
     for nu, eigvec in zip(nus[below_thresh], cart_displs[:, below_thresh].T):
+        eigvec = eigvec.cpu().numpy() if isinstance(eigvec, torch.Tensor) else eigvec
         comment = f"{nu:.2f} cm^-1"
         trj_str = get_tangent_trj_str(
             geom.atoms,
