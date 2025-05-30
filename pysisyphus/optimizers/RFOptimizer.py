@@ -12,6 +12,7 @@ from pysisyphus.optimizers.HessianOptimizer import HessianOptimizer
 from pysisyphus.optimizers.poly_fit import poly_line_search
 from pysisyphus.optimizers.gdiis import gdiis, gediis
 
+import torch
 
 class RFOptimizer(HessianOptimizer):
     def __init__(
@@ -74,9 +75,9 @@ class RFOptimizer(HessianOptimizer):
         energy, gradient, H, big_eigvals, big_eigvecs, resetted = self.housekeeping()
         step_func, pred_func = self.get_step_func(big_eigvals, gradient)
 
-        ref_gradient = gradient.copy()
+        ref_gradient = gradient.copy() if isinstance(gradient, np.ndarray) else gradient.clone()
         # Reference step, used for judging the proposed GDIIS step
-        ref_step = step_func(big_eigvals, big_eigvecs, gradient)
+        ref_step = step_func(big_eigvals, big_eigvecs, gradient) # heavy-compute
 
         # Right everything is in place to check for convergence.  If all values are below
         # the thresholds, there is no need to do additional inter/extrapolations.
@@ -101,7 +102,10 @@ class RFOptimizer(HessianOptimizer):
         # GDIIS / GEDIIS, prefer GDIIS over GEDIIS
         if self.gdiis and can_diis:
             # Gradients as error vectors
-            err_vecs = -np.array(self.forces)
+            if isinstance(ref_step, torch.Tensor):
+                err_vecs = -torch.from_numpy(np.array(self.forces)).to(ref_step.dtype).to(ref_step.device)
+            else:
+                err_vecs = -np.array(self.forces)
             diis_result = gdiis(
                 err_vecs,
                 self.coords,
@@ -119,7 +123,10 @@ class RFOptimizer(HessianOptimizer):
 
         try:
             ip_coords = diis_result.coords
-            ip_step = ip_coords - self.geometry.coords
+            if isinstance(ip_coords, torch.Tensor):
+                ip_step = ip_coords - torch.from_numpy(self.geometry.coords).to(ip_coords.device, ip_coords.dtype)
+            else:
+                ip_step = ip_coords - self.geometry.coords
             ip_gradient = -diis_result.forces
         # When diis_result is None
         except AttributeError:
@@ -145,9 +152,12 @@ class RFOptimizer(HessianOptimizer):
         # Keep the original gradient when the interpolation failed, but recreate
         # ip_step, as it will be returned as None from poly_line_search().
         else:
-            ip_step = np.zeros_like(gradient)
+            if isinstance(gradient, torch.Tensor):
+                ip_step = torch.zeros_like(gradient, dtype=gradient.dtype, device=gradient.device)
+            else:
+                ip_step = np.zeros_like(gradient)
 
-        step = step_func(big_eigvals, big_eigvecs, gradient)
+        step = step_func(big_eigvals, big_eigvecs, gradient) # heavy-compute
         # Form full step. If we did not interpolate or interpolation failed,
         # ip_step will be zero.
         step = step + ip_step
@@ -156,6 +166,8 @@ class RFOptimizer(HessianOptimizer):
         prediction = pred_func(ref_gradient, H, step)
         self.predicted_energy_changes.append(prediction)
 
+        if isinstance(step, torch.Tensor):
+            step = step.cpu().numpy()
         return step
 
     def postprocess_opt(self):

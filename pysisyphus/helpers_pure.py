@@ -19,6 +19,7 @@ import psutil
 from pysisyphus.config import p_DEFAULT, T_DEFAULT
 from pysisyphus.constants import AU2J, BOHR2ANG, C, R, AU2KJPERMOL, NA
 
+import torch
 
 """Functions defined here don't import anything from pysisyphus, besides
 the constants module, but only from the stdlib and from third parties."""
@@ -639,4 +640,8 @@ def kill_dir(path):
 
 
 def rms(arr):
-    return np.sqrt(np.mean(arr**2))
+    if isinstance(arr, torch.Tensor):
+        result = torch.sqrt(torch.mean(arr**2))
+    else:
+        result = np.sqrt(np.mean(arr**2))
+    return result

@@ -8,6 +8,7 @@ import sympy as sym
 
 from pysisyphus.helpers_pure import log
 
+import torch
 
 logger = logging.getLogger("optimizer")
 
@@ -237,6 +238,11 @@ def poly_line_search(
     logger=None,
 ):
     """Generate directional gradients by projecting them on the previous step."""
+    return_torch = False
+    if isinstance(cur_grad, torch.Tensor):
+        return_torch = True
+        device, dtype = cur_grad.device, cur_grad.dtype
+        cur_grad = cur_grad.cpu().numpy()
     prev_grad_proj = prev_step @ prev_grad
     cur_grad_proj = prev_step @ cur_grad
     cubic_result = cubic_fit(prev_energy, cur_energy, prev_grad_proj, cur_grad_proj)
@@ -273,4 +279,7 @@ def poly_line_search(
         #  with x=2, (1-2) * -prev_step = -1*-prev_step = prev_step
         fit_step = (1 - x) * -prev_step
         fit_grad = (1 - x) * prev_grad + x * cur_grad
+        if return_torch:
+            fit_grad = torch.tensor(fit_grad, dtype=dtype, device=device)
+            fit_step = torch.tensor(fit_step, dtype=dtype, device=device)
     return fit_energy, fit_grad, fit_step

@@ -396,7 +396,10 @@ class HessianOptimizer(Optimizer):
         # When using the restricted step variant of RFO the RFO matrix
         # may not be symmetric. Thats why we can't use eigh here.
         if isinstance(rfo_mat, torch.Tensor):
-            eigenvalues, eigenvectors = torch.linalg.eig(rfo_mat) # heavy-compute
+            if torch.equal(rfo_mat, rfo_mat.T):
+                eigenvalues, eigenvectors = torch.linalg.eigh(rfo_mat)
+            else:
+                eigenvalues, eigenvectors = torch.linalg.eig(rfo_mat) # heavy-compute
         else:
             eigenvalues, eigenvectors = np.linalg.eig(rfo_mat)
         self.log("\tdiagonalized augmented Hessian")

@@ -18,6 +18,8 @@ from autograd import grad
 import numpy as np
 from scipy.optimize import minimize
 
+from pysisyphus.helpers import array2string
+import torch
 
 COS_CUTOFFS = {
     # Looser cutoffs
@@ -44,14 +46,22 @@ def log(msg):
 
 
 def valid_diis_direction(diis_step, ref_step, use):
-    ref_direction = ref_step / np.linalg.norm(ref_step)
-    diis_direction = diis_step / np.linalg.norm(diis_step)
-    cos = diis_direction @ ref_direction
+    if isinstance(diis_step, torch.Tensor):
+        ref_direction = ref_step / torch.linalg.norm(ref_step)
+        diis_direction = diis_step / torch.linalg.norm(diis_step)
+        cos = torch.dot(diis_direction, ref_direction)
+    else:
+        ref_direction = ref_step / np.linalg.norm(ref_step)
+        diis_direction = diis_step / np.linalg.norm(diis_step)
+        cos = diis_direction @ ref_direction
     return (cos >= COS_CUTOFFS[use]) and (cos >= 0)
 
 
 def from_coeffs(vec, coeffs):
-    return np.sum(coeffs[:, None] * vec[::-1][: len(coeffs)], axis=0)
+    if isinstance(vec, torch.Tensor):
+        return torch.sum(coeffs[:, None] * vec.flip(0)[: len(coeffs)], dim=0)
+    else:
+        return np.sum(coeffs[:, None] * vec[::-1][: len(coeffs)], axis=0)
 
 
 def diis_result(coeffs, coords, forces, energy=None, prefix=""):
@@ -72,26 +82,46 @@ def diis_result(coeffs, coords, forces, energy=None, prefix=""):
 
 def gdiis(err_vecs, coords, forces, ref_step, max_vecs=5, test_direction=True):
     # Scale error vectors so the smallest norm is 1
-    norms = np.linalg.norm(err_vecs, axis=1)
+    if isinstance(err_vecs, torch.Tensor):
+        coords = torch.from_numpy(np.array(coords)).to(err_vecs.device, dtype=err_vecs.dtype)
+        forces = torch.from_numpy(np.array(forces)).to(err_vecs.device, dtype=err_vecs.dtype)
+        norms = torch.linalg.norm(err_vecs, dim=1)
+    else:
+        norms = np.linalg.norm(err_vecs, axis=1)
     err_vecs = err_vecs / norms.min()
 
     valid_coeffs = None
     for use in range(2, min(max_vecs, len(err_vecs)) + 1):
         log(f"Trying GDIIS with {use} previous cycles.")
-        use_vecs = np.array(err_vecs[::-1][:use])
-
-        A = np.einsum("ij,kj->ik", use_vecs, use_vecs)
+        if isinstance(err_vecs, torch.Tensor):
+            use_vecs = err_vecs.flip(0)[:use]
+            A = torch.einsum("ij,kj->ik", use_vecs, use_vecs)
+        else:
+            use_vecs = np.array(err_vecs[::-1][:use])
+            A = np.einsum("ij,kj->ik", use_vecs, use_vecs)
         try:
-            coeffs = np.linalg.solve(A, np.ones(use))
+            if isinstance(err_vecs, torch.Tensor):
+                coeffs = torch.linalg.solve(A, torch.ones(use, device=err_vecs.device))
+            else:
+                coeffs = np.linalg.solve(A, np.ones(use))
         except np.linalg.LinAlgError:
             log("LinAlgError when solving GDIIS matrix.")
             break
+        except torch.linalg.LinAlgError:
+            log("Torch LinAlgError when solving GDIIS matrix.")
+            break
         # Scale coeffs so that their sum equals 1
-        coeffs_norm = np.linalg.norm(coeffs)
+        if isinstance(err_vecs, torch.Tensor):
+            coeffs_norm = torch.linalg.norm(coeffs)
+        else:
+            coeffs_norm = np.linalg.norm(coeffs) 
         valid_coeffs_norm = coeffs_norm <= 1e8
         log(f"\tError vectors are linearly independent: {valid_coeffs_norm}")
-        coeffs /= np.sum(coeffs)
-        coeffs_str = np.array2string(coeffs, precision=4)
+        if isinstance(err_vecs, torch.Tensor):
+            coeffs /= torch.sum(coeffs)
+        else:
+            coeffs /= np.sum(coeffs)
+        coeffs_str = array2string(coeffs, precision=4)
         log(f"\tGDIIS coefficients: {coeffs_str}")
 
         # Uncomment these lines and break here to only do the basic check
@@ -110,7 +140,10 @@ def gdiis(err_vecs, coords, forces, ref_step, max_vecs=5, test_direction=True):
         # Calculate GDIIS step for comparison to the reference step
         diis_coords = from_coeffs(coords, coeffs)
         diis_step = diis_coords - coords[-1]
-        valid_length = np.linalg.norm(diis_step) <= (10 * np.linalg.norm(ref_step))
+        if isinstance(err_vecs, torch.Tensor):
+            valid_length = torch.linalg.norm(diis_step) <= (10 * torch.linalg.norm(ref_step))
+        else:
+            valid_length = np.linalg.norm(diis_step) <= (10 * np.linalg.norm(ref_step))
         log(f"\tGDIIS step has valid length: {valid_length}")
 
         # Compare directions of GDIIS- and reference step
@@ -143,15 +176,26 @@ def gdiis(err_vecs, coords, forces, ref_step, max_vecs=5, test_direction=True):
 
 def gediis(coords, energies, forces, hessian=None, max_vecs=3):
     use = min(len(coords), max_vecs)
-
-    R = coords[::-1][:use]
-    E = np.ravel(energies[::-1][:use])
-    f = forces[::-1][:use]
+    if isinstance(hessian, torch.Tensor):
+        coords = torch.from_numpy(np.array(coords)).to(device=hessian.device, dtype=hessian.dtype)
+        energies = torch.tensor(energies, device=hessian.device, dtype=hessian.dtype)
+        forces = torch.from_numpy(np.array(forces)).to(device=hessian.device, dtype=hessian.dtype)
+        R = coords.flip(0)[:use]
+        E = energies.flip(0)[:use].reshape(-1)
+        f = forces.flip(0)[:use]
+    else:
+        R = coords[::-1][:use]
+        E = np.ravel(energies[::-1][:use])
+        f = forces[::-1][:use]
     assert len(R) == len(E) == len(f)
     log(f"Trying GEDIIS with {use} previous cycles.")
     # Precompute values so they can be reused in fun()
-    Rifi = np.einsum("ik,ik->i", R, f)
-    Rjfi = np.einsum("jk,ik->ji", R, f)
+    if isinstance(R, torch.Tensor):
+        Rifi = torch.einsum("ik,ik->i", R, f).cpu().numpy()
+        Rjfi = torch.einsum("jk,ik->ji", R, f).cpu().numpy()
+    else:
+        Rifi = np.einsum("ik,ik->i", R, f)
+        Rjfi = np.einsum("jk,ik->ji", R, f)
 
     def x2c(x):
         return x ** 2 / (x ** 2).sum()
@@ -182,10 +226,14 @@ def gediis(coords, energies, forces, hessian=None, max_vecs=3):
             )
 
     else:
-        hessian_inv = np.linalg.pinv(hessian, rcond=1e-6)
-        # It doesn't matter if we use forces or gradients, as the signs will cancel.
-        # gHig = 0.5 * np.einsum("ki,ji,ki->k", f, hessian_inv, f)
-        gHig = np.einsum("ki,ji,ki->k", f, hessian_inv, f)
+        if isinstance(hessian, torch.Tensor):
+            hessian_inv = torch.linalg.pinv(hessian, rcond=1e-6)
+            gHig = torch.einsum("ki,ji,ki->k", f, hessian_inv, f).cpu().numpy()
+        else:
+            hessian_inv = np.linalg.pinv(hessian, rcond=1e-6)
+            # It doesn't matter if we use forces or gradients, as the signs will cancel.
+            # gHig = 0.5 * np.einsum("ki,ji,ki->k", f, hessian_inv, f)
+            gHig = np.einsum("ki,ji,ki->k", f, hessian_inv, f)
 
         def fun(xs):
             """Eq. (5) from [4]."""
@@ -217,8 +265,10 @@ def gediis(coords, energies, forces, hessian=None, max_vecs=3):
     if res.success:
         coeffs = x2c(res.x)
         en_ = res.fun
+        if isinstance(hessian, torch.Tensor):
+            coeffs = torch.from_numpy(coeffs).to(device=hessian.device, dtype=hessian.dtype)
     log(f"\tOptimization converged!")
-    coeff_str = np.array2string(coeffs, precision=4)
+    coeff_str = array2string(coeffs, precision=4)
     log(f"\tCoefficients: {coeff_str}")
     # en_ = (E * coeffs).sum()
     # import pdb; pdb.set_trace()

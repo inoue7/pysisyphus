@@ -27,6 +27,7 @@ from pysisyphus.io.hdf5 import get_h5_group, resize_h5_group
 from pysisyphus.optimizers.exceptions import ZeroStepLength
 from pysisyphus.TablePrinter import TablePrinter
 
+import torch
 
 def get_data_model(geometry, is_cos, max_cycles):
     try:
@@ -473,6 +474,9 @@ class Optimizer(metaclass=abc.ABCMeta):
             step = self.steps[-1]
         if overachieve_factor is None:
             overachieve_factor = self.overachieve_factor
+
+        if isinstance(step, torch.Tensor):
+            step = step.detach().cpu().numpy()
 
         # When using a ChainOfStates method we are only interested
         # in optimizing the forces perpendicular to the MEP.
