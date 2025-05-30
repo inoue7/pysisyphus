@@ -39,7 +39,7 @@ class RSIRFOptimizer(TSHessianOptimizer):
             grad_star = P @ gradient
         else:
             grad_star = P.dot(gradient)
-        step = self.get_rs_step(eigvals_, eigvecs_, grad_star, name="RS-I-RFO") #heavy-compute
+        step = self.get_rs_step(eigvals_, eigvecs_, grad_star, name="RS-I-RFO")
 
         self.predicted_energy_changes.append(self.rfo_model(gradient, self.H, step))
         if isinstance(step, torch.Tensor):

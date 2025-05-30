@@ -395,9 +395,15 @@ class HessianOptimizer(Optimizer):
         # When using the restricted step variant of RFO the RFO matrix
         # may not be symmetric. Thats why we can't use eigh here.
         if isinstance(rfo_mat, torch.Tensor):
-            eigenvalues, eigenvectors = torch.linalg.eig(rfo_mat) # heavy-compute
+            rfo_mat = 0.5*(rfo_mat + rfo_mat.T)
+            rfo_mat += 1e-8 * torch.eye(rfo_mat.size(-1), device=rfo_mat.device, dtype=rfo_mat.dtype)
+            try:
+                eigenvalues, eigenvectors = torch.linalg.eigh(rfo_mat)
+            except torch._C._LinAlgError:
+                eigenvalues, eigenvectors = torch.linalg.eig(rfo_mat)
+                eigenvalues = eigenvalues.real
         else:
-            eigenvalues, eigenvectors = np.linalg.eig(rfo_mat)
+            eigenvalues, eigenvectors = np.linalg.eigh(rfo_mat)
         self.log("\tdiagonalized augmented Hessian")
         eigenvalues = eigenvalues.real
         eigenvectors = eigenvectors.real
@@ -580,7 +586,10 @@ class HessianOptimizer(Optimizer):
             )
             H_aug = self.get_augmented_hessian(eigvals, gradient_, alpha=1.0)
             rfo_step_, eigval_min, nu, _ = self.solve_rfo(H_aug, "min")
-            rfo_norm_ = np.linalg.norm(rfo_step_)
+            if isinstance(rfo_step_, torch.Tensor):
+                rfo_norm_ = torch.linalg.norm(rfo_step_)
+            else:
+                rfo_norm_ = np.linalg.norm(rfo_step_)
 
             # This should always be True if the above algorithm failed but we
             # keep this line nonetheless,  to make it more obvious.
@@ -599,7 +608,9 @@ class HessianOptimizer(Optimizer):
 
         # Transform step back to original basis
         if isinstance(eigvecs, torch.Tensor):
+            step_ = torch.tensor(step_, device=eigvecs.device, dtype=eigvecs.dtype)
             step = eigvecs @ step_
+            step = step.cpu().numpy()
         else:
             step = eigvecs.dot(step_)
         return step
@@ -610,17 +621,29 @@ class HessianOptimizer(Optimizer):
 
     @staticmethod
     def get_newton_step(eigvals, eigvecs, gradient):
-        return eigvecs.dot(eigvecs.T.dot(gradient) / eigvals)
+        if isinstance(eigvecs, torch.Tensor):
+            eigvals = eigvals.to(eigvecs.device, dtype=eigvecs.dtype)
+            gradient = gradient.to(eigvecs.device, dtype=eigvecs.dtype)
+            return (eigvecs @ (eigvecs.T @ gradient / eigvals)).cpu().numpy()
+        else:
+            return eigvecs.dot(eigvecs.T.dot(gradient) / eigvals)
 
     def get_newton_step_on_trust(self, eigvals, eigvecs, gradient, transform=True):
         """Step on trust-radius.
 
         See Nocedal 4.3 Iterative solutions of the subproblem
         """
+        if isinstance(eigvals, torch.Tensor):
+            eigvals = eigvals.cpu().numpy()
+
         min_ind = eigvals.argmin()
         min_eigval = eigvals[min_ind]
-        pos_definite = (eigvals > 0.0).all()
-        gradient_trans = eigvecs.T.dot(gradient)
+        pos_definite = bool((eigvals > 0.0).all())
+        if isinstance(eigvecs, torch.Tensor):
+            gradient_trans = eigvecs.T @ gradient
+            gradient_trans = gradient_trans.cpu().numpy()
+        else:
+            gradient_trans = eigvecs.T.dot(gradient)
 
         # This will be also be True when we come close to a minimizer,
         # but then the Hessian will also be positive definite and a
@@ -713,7 +736,8 @@ class HessianOptimizer(Optimizer):
     @staticmethod
     def quadratic_model(gradient, hessian, step):
         if isinstance(gradient, torch.Tensor):
-            return step @ gradient + 0.5 * step @ hessian @ step
+            step = torch.tensor(step, device=gradient.device, dtype=gradient.dtype)
+            return (step @ gradient + 0.5 * step @ hessian @ step).cpu().numpy()
         else:
             return step.dot(gradient) + 0.5 * step.dot(hessian).dot(step)
 
